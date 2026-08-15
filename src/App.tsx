@@ -1,17 +1,19 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, User } from 'firebase/auth';
-import { getFirestore, doc, setDoc, onSnapshot, collection } from 'firebase/firestore';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import type { User } from 'firebase/auth';
+import { getFirestore, doc, setDoc, onSnapshot } from 'firebase/firestore';
 import { 
   MousePointer2, PenTool, StickyNote, Plus, RotateCw, Copy, Trash2, 
   SplitSquareHorizontal, SplitSquareVertical, Undo, Redo, Download, 
   AlignLeft, AlignCenter, AlignRight, Bold, Italic, Underline, Highlighter, 
-  Settings2, BoxSelect, Columns3
+  Settings2, BoxSelect
 } from 'lucide-react';
 
-// =========================================================================
-// 1. FIREBASE INITIALIZATION (Dijalankan di luar komponen)
-// =========================================================================
+declare const __firebase_config: string | undefined;
+declare const __app_id: string | undefined;
+declare const __initial_auth_token: string | undefined;
+
 const firebaseConfig = typeof __firebase_config !== 'undefined' 
   ? JSON.parse(__firebase_config) 
   : { 
@@ -23,18 +25,16 @@ const firebaseConfig = typeof __firebase_config !== 'undefined'
   messagingSenderId: "472236933583",
   appId: "1:472236933583:web:cea60394372c8113dad2ba",
   measurementId: "G-S2YF7PXJX5"
+
     };
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'room-decorator-app';
+const appId = typeof __app_id !== 'undefined' ? __app_id.replace(/[\/\.]/g, '_') : 'room-decorator-app';
 
 // =========================================================================
 // 2. TYPES & INTERFACES
-// =========================================================================
-type EntityType = 'furniture' | 'opening' | 'column' | 'leader' | 'note';
-
 interface Room {
   id: string; x: number; y: number; w: number; h: number;
   floorPattern: string; floorColor: string; tileSize: number;
@@ -43,10 +43,7 @@ interface Room {
 interface Entity {
   id: string; type: EntityType; x: number; y: number; w: number; h: number;
   rotation?: number; color?: string; subType?: string;
-  
-  // Specific properties
-  potShape?: string;
-  wallSide?: 'top' | 'bottom' | 'left' | 'right';
+  potShape?: string; wallSide?: 'top' | 'bottom' | 'left' | 'right';
   count?: number; swingDir?: 'in' | 'out';
   startX?: number; startY?: number; endX?: number; endY?: number;
   text?: string; visible?: boolean;
@@ -57,52 +54,42 @@ interface Entity {
 
 interface DragData {
   id: string; isRoom: boolean; offsetX: number; offsetY: number;
-  draggingEnd?: boolean; boundEnts?: any[];
+  draggingEnd?: boolean; boundEnts?: {id: string, dx: number, dy: number, dxEnd: number, dyEnd: number}[];
 }
 
 const COLORS = [
-  '#94a3b8', '#475569', '#1e293b', // Grays
-  '#fef08a', '#eab308', '#ca8a04', // Yellows
-  '#fed7aa', '#f97316', '#c2410c', // Oranges
-  '#fbcfe8', '#ec4899', '#be185d', // Pinks
-  '#bfdbfe', '#3b82f6', '#1d4ed8', // Blues
-  '#a7f3d0', '#10b981', '#047857', // Greens
-  '#a5f3fc', '#06b6d4', '#0e7490', // Aquas
-  '#fca5a5', '#ef4444', '#b91c1c', // Reds
-  '#d97706', '#b45309', '#78350f'  // Woods
+  '#94a3b8', '#475569', '#1e293b', '#fef08a', '#eab308', '#ca8a04', 
+  '#fed7aa', '#f97316', '#c2410c', '#fbcfe8', '#ec4899', '#be185d', 
+  '#bfdbfe', '#3b82f6', '#1d4ed8', '#a7f3d0', '#10b981', '#047857', 
+  '#a5f3fc', '#06b6d4', '#0e7490', '#fca5a5', '#ef4444', '#b91c1c', 
+  '#d97706', '#b45309', '#78350f'
 ];
 
-const uuid = () => Date.now().toString(36) + Math.random().toString(36).substr(2);
+const uuid = () => Date.now().toString(36) + Math.random().toString(36).substring(2);
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   
-  // -- App State --
   const [user, setUser] = useState<User | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [mode, setMode] = useState<'select' | 'opening' | 'leader' | 'note'>('select');
   
-  // -- Data State --
   const [rooms, setRooms] = useState<Room[]>([{ id: 'room-1', x: 1000, y: 700, w: 800, h: 600, floorPattern: 'putih', floorColor: '#ffffff', tileSize: 40 }]);
   const [entities, setEntities] = useState<Entity[]>([]);
   
-  // -- Selection & Interaction State --
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
   const dragDataRef = useRef<DragData | null>(null);
-  const leaderDrawDataRef = useRef<any>(null);
+  const leaderDrawDataRef = useRef<any>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
   
-  // -- History State --
   const historyRef = useRef<{ rooms: Room[], entities: Entity[] }[]>([]);
   const historyIndexRef = useRef<number>(-1);
 
-  // -- UI Control State --
   const [currentMaterial, setCurrentMaterial] = useState(COLORS[0]);
   const [objForm, setObjForm] = useState({ type: 'Kursi Kerja', w: 60, h: 60, potShape: 'Bulat' });
   const [openingForm, setOpeningForm] = useState({ type: 'Pintu', count: 1, dir: 'in', w: 80 });
   const [colSize, setColSize] = useState(30);
 
-  // 1. Init Firebase Auth
   useEffect(() => {
     const initAuth = async () => {
       try {
@@ -111,19 +98,19 @@ export default function App() {
         } else {
           await signInAnonymously(auth);
         }
-      } catch (err) { console.warn("Auth warning (might be offline):", err); }
+      } catch (err) { console.warn("Auth warning:", err); }
     };
     initAuth();
     const unsubscribe = onAuthStateChanged(auth, setUser);
     return () => unsubscribe();
   }, []);
 
-  // 2. Real-time Firestore Sync
   useEffect(() => {
     if (!user) return;
-    
-    // Gunakan Rule 1: artifacts/{appId}/public/data/{collectionName}
-    const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'workspaces', 'team_layout_utama');
+    const path = typeof __app_id !== 'undefined' 
+      ? `artifacts/${appId}/public/data/workspaces/team_layout_utama` 
+      : 'workspaces/team_layout_utama';
+    const docRef = doc(db, path);
     
     const unsub = onSnapshot(docRef, (snapshot) => {
       if (snapshot.exists()) {
@@ -133,12 +120,11 @@ export default function App() {
           setEntities(data.entities || []);
         }
       }
-    }, (err) => console.error("Sync Error:", err));
+    }, (err) => console.warn("Sync Error (If permissions fail, ensure rules are set in Firebase):", err));
     
     return () => unsub();
   }, [user]);
 
-  // Load html2pdf dynamically
   useEffect(() => {
     const script = document.createElement('script');
     script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js";
@@ -148,23 +134,22 @@ export default function App() {
   const saveState = useCallback((newRooms: Room[], newEnts: Entity[]) => {
     let hist = historyRef.current;
     let idx = historyIndexRef.current;
-    
-    if (idx < hist.length - 1) {
-      hist = hist.slice(0, idx + 1);
-    }
+    if (idx < hist.length - 1) { hist = hist.slice(0, idx + 1); }
     hist.push({ rooms: JSON.parse(JSON.stringify(newRooms)), entities: JSON.parse(JSON.stringify(newEnts)) });
     historyRef.current = hist;
     historyIndexRef.current = hist.length - 1;
 
-    setRooms(newRooms);
-    setEntities(newEnts);
+    setRooms(newRooms); setEntities(newEnts);
 
-    // Sync to Firebase
     if (user && !isSyncing) {
       setIsSyncing(true);
-      const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'workspaces', 'team_layout_utama');
+      const path = typeof __app_id !== 'undefined' 
+        ? `artifacts/${appId}/public/data/workspaces/team_layout_utama` 
+        : 'workspaces/team_layout_utama';
+      const docRef = doc(db, path);
+      
       setDoc(docRef, { rooms: newRooms, entities: newEnts })
-        .catch(e => console.error(e))
+        .catch(e => console.warn("Cannot save to Firebase:", e))
         .finally(() => setIsSyncing(false));
     }
   }, [user, isSyncing]);
@@ -178,14 +163,12 @@ export default function App() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = '#f8fafc'; ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // Grid
     ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 1;
     for(let i=0; i<canvas.width; i+=100) { ctx.beginPath(); ctx.moveTo(i,0); ctx.lineTo(i,canvas.height); ctx.stroke(); }
     for(let i=0; i<canvas.height; i+=100) { ctx.beginPath(); ctx.moveTo(0,i); ctx.lineTo(canvas.width,i); ctx.stroke(); }
 
     const wallThickness = 15;
 
-    // Draw Rooms
     rooms.forEach(r => {
       ctx.save();
       ctx.fillStyle = r.floorColor || '#ffffff';
@@ -219,17 +202,14 @@ export default function App() {
       ctx.restore();
     });
 
-    // Draw Entities
     const openings = entities.filter(e => e.type === 'opening');
     const columns = entities.filter(e => e.type === 'column');
     const furnitures = entities.filter(e => e.type === 'furniture');
     const leaders = entities.filter(e => e.type === 'leader');
     const notes = entities.filter(e => e.type === 'note');
-
     const carpets = furnitures.filter(e => e.subType === 'Karpet');
     const others = furnitures.filter(e => e.subType !== 'Karpet');
     
-    // Z-Indexing: Carpets -> Openings -> Furniture -> Columns -> Leaders -> Notes
     carpets.forEach(c => drawFurniture(ctx, c));
     openings.forEach(op => drawOpening(ctx, op, wallThickness));
     others.forEach(furn => drawFurniture(ctx, furn));
@@ -238,7 +218,7 @@ export default function App() {
     notes.forEach(n => drawNote(ctx, n));
 
     if (leaderDrawDataRef.current) drawLeader(ctx, leaderDrawDataRef.current, true);
-
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rooms, entities, selectedEntityId, selectedRoomId]);
 
   useEffect(() => { draw(); }, [draw]);
@@ -268,7 +248,6 @@ export default function App() {
       const dirY = (op.swingDir === 'out') ? -1 : 1;
       
       for(let i=0; i<count; i++) {
-        // Logika bukaan kupu-kupu yang benar (mirrored hinge untuk multi-door)
         const isRightHinge = count === 2 ? (i === 1) : (i % 2 !== 0);
         const hingeX = -op.w/2 + (i * leafW) + (isRightHinge ? leafW : 0);
         
@@ -303,55 +282,37 @@ export default function App() {
     ctx.fillStyle = c; ctx.strokeStyle = '#1e293b'; ctx.lineWidth = 1.5;
 
     if (ent.subType === 'Meja' || ent.subType === 'Meja Tamu' || ent.subType === 'Custom') {
-      // Meja polos dan rapi
       ctx.beginPath(); ctx.rect(-ent.w/2, -ent.h/2, ent.w, ent.h); ctx.fill(); ctx.stroke();
-      // Efek bevel ringan di tepian agar tidak terlalu flat
       ctx.strokeStyle = 'rgba(255,255,255,0.3)'; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.moveTo(-ent.w/2 + 2, -ent.h/2 + 2); ctx.lineTo(ent.w/2 - 2, -ent.h/2 + 2); ctx.stroke();
     } else if (ent.subType === 'Kulkas') {
-      // Kulkas dengan efek pintu dan gagang
       ctx.beginPath(); ctx.rect(-ent.w/2, -ent.h/2, ent.w, ent.h); ctx.fill(); ctx.stroke();
-      // Garis pintu depan (diasumsikan menghadap ke "bawah" / sumbu Y positif)
       ctx.fillStyle = 'rgba(255,255,255,0.2)'; ctx.fillRect(-ent.w/2 + 2, ent.h/2 - 10, ent.w - 4, 8);
       ctx.beginPath(); ctx.moveTo(-ent.w/2, ent.h/2 - 12); ctx.lineTo(ent.w/2, ent.h/2 - 12); ctx.strokeStyle = '#1e293b'; ctx.lineWidth = 1; ctx.stroke();
-      // Gagang pintu
       ctx.fillStyle = '#64748b'; ctx.fillRect(ent.w/2 - 15, ent.h/2 - 20, 8, 4);
     } else if (ent.subType === 'Karpet') {
-      // Karpet dengan sedikit tekstur/pola di sudut
       ctx.beginPath(); ctx.rect(-ent.w/2, -ent.h/2, ent.w, ent.h); ctx.fill(); 
       ctx.strokeStyle = 'rgba(0,0,0,0.2)'; ctx.lineWidth = 2; ctx.setLineDash([4, 4]);
       ctx.strokeRect(-ent.w/2 + 5, -ent.h/2 + 5, ent.w - 10, ent.h - 10); ctx.setLineDash([]);
     } else if (ent.subType === 'Kursi Kerja') {
-      // Top down detailed chair - improved
-      ctx.beginPath(); ctx.arc(0, 0, ent.w/2 - 8, 0, Math.PI*2); ctx.fillStyle = c; ctx.fill(); ctx.stroke(); // Seat
+      ctx.beginPath(); ctx.arc(0, 0, ent.w/2 - 8, 0, Math.PI*2); ctx.fillStyle = c; ctx.fill(); ctx.stroke(); 
       ctx.fillStyle = '#1e293b';
-      // Backrest melengkung
       ctx.beginPath(); ctx.arc(0, -ent.h/2 + 5, ent.w/2 - 5, Math.PI + Math.PI/4, 2*Math.PI - Math.PI/4); ctx.lineWidth = 6; ctx.stroke();
-      // Armrests
       ctx.fillStyle = '#334155'; ctx.fillRect(-ent.w/2 + 2, -ent.h/6, 6, ent.h/3); ctx.fillRect(ent.w/2 - 8, -ent.h/6, 6, ent.h/3);
-      // Wheels indicator (Star base)
       ctx.strokeStyle = '#64748b'; ctx.lineWidth = 2;
       for(let i=0; i<5; i++) {
         ctx.beginPath(); ctx.moveTo(0,0); 
         ctx.lineTo(Math.cos(i * Math.PI * 2 / 5 - Math.PI/2) * (ent.w/2), Math.sin(i * Math.PI * 2 / 5 - Math.PI/2) * (ent.h/2));
         ctx.stroke();
-        // Roda
         ctx.beginPath(); ctx.arc(Math.cos(i * Math.PI * 2 / 5 - Math.PI/2) * (ent.w/2), Math.sin(i * Math.PI * 2 / 5 - Math.PI/2) * (ent.h/2), 2, 0, Math.PI*2); ctx.fillStyle = '#0f172a'; ctx.fill();
       }
     } else if (ent.subType === 'Sofa') {
       const isSingle = Math.abs(ent.w - ent.h) < 20;
-      // Badan sofa utama (cushions)
       drawRoundRect(ctx, -ent.w/2 + 10, -ent.h/2 + 10, ent.w - 20, ent.h - 20, 5); ctx.fill(); ctx.stroke();
-      // Sandaran (Backrest & Armrests)
       ctx.fillStyle = c;
-      // Belakang
       drawRoundRect(ctx, -ent.w/2, -ent.h/2, ent.w, 15, 5); ctx.fill(); ctx.stroke();
-      // Kiri
       drawRoundRect(ctx, -ent.w/2, -ent.h/2, 15, ent.h, 5); ctx.fill(); ctx.stroke();
-      // Kanan
       drawRoundRect(ctx, ent.w/2 - 15, -ent.h/2, 15, ent.h, 5); ctx.fill(); ctx.stroke();
-      
-      // Garis pemisah cushion untuk sofa panjang
       if(!isSingle) { 
         const seats = Math.floor(ent.w / 60) || 2;
         const seatW = (ent.w - 20) / seats;
@@ -360,46 +321,36 @@ export default function App() {
         }
       }
     } else if (ent.subType === 'Proyektor') {
-      // Body proyektor lebih detail
       drawRoundRect(ctx, -ent.w/2, -ent.h/2, ent.w, ent.h, 4); ctx.fill(); ctx.stroke();
-      // Lensa di depan (asumsi menghadap Y positif)
       ctx.beginPath(); ctx.arc(0, ent.h/2, ent.w/5, Math.PI, 0, true); ctx.fillStyle = '#e2e8f0'; ctx.fill(); ctx.stroke();
       ctx.beginPath(); ctx.arc(0, ent.h/2, ent.w/8, Math.PI, 0, true); ctx.fillStyle = '#0f172a'; ctx.fill();
-      // Tombol/detail di atas
       ctx.fillStyle = '#64748b'; ctx.fillRect(-ent.w/2 + 5, -ent.h/2 + 5, 10, 5);
     } else if (ent.subType === 'AC Indoor') {
-      // AC Indoor lebih proporsional
       drawRoundRect(ctx, -ent.w/2, -ent.h/2, ent.w, ent.h, 3); ctx.fill(); ctx.stroke();
-      // Kisi-kisi udara (louvers) di bagian bawah/depan
       ctx.beginPath(); ctx.moveTo(-ent.w/2 + 5, ent.h/2 - 4); ctx.lineTo(ent.w/2 - 5, ent.h/2 - 4); ctx.strokeStyle = 'rgba(0,0,0,0.3)'; ctx.lineWidth = 1.5; ctx.stroke();
       ctx.beginPath(); ctx.moveTo(-ent.w/2 + 5, ent.h/2 - 8); ctx.lineTo(ent.w/2 - 5, ent.h/2 - 8); ctx.stroke();
-      // Display/Lampu kecil
       ctx.fillStyle = '#10b981'; ctx.beginPath(); ctx.arc(ent.w/2 - 10, -ent.h/2 + 8, 1.5, 0, Math.PI*2); ctx.fill();
     } else if (ent.subType === 'Tanaman') {
       if(ent.potShape === 'Kotak') { 
         drawRoundRect(ctx, -15, -15, 30, 30, 4); ctx.fill(); ctx.stroke(); 
-        ctx.fillStyle = '#452c06'; drawRoundRect(ctx, -12, -12, 24, 24, 2); ctx.fill(); // Tanah
+        ctx.fillStyle = '#452c06'; drawRoundRect(ctx, -12, -12, 24, 24, 2); ctx.fill();
       }
       else if (ent.potShape === 'Segi-6') {
         ctx.beginPath(); for(let i=0; i<6; i++) { ctx.lineTo(16 * Math.cos(i*Math.PI/3), 16 * Math.sin(i*Math.PI/3)); } ctx.closePath(); ctx.fill(); ctx.stroke();
         ctx.fillStyle = '#452c06'; ctx.beginPath(); for(let i=0; i<6; i++) { ctx.lineTo(12 * Math.cos(i*Math.PI/3), 12 * Math.sin(i*Math.PI/3)); } ctx.closePath(); ctx.fill();
       } else { 
         ctx.beginPath(); ctx.arc(0, 0, 15, 0, Math.PI*2); ctx.fill(); ctx.stroke(); 
-        ctx.fillStyle = '#452c06'; ctx.beginPath(); ctx.arc(0, 0, 12, 0, Math.PI*2); ctx.fill(); // Tanah
+        ctx.fillStyle = '#452c06'; ctx.beginPath(); ctx.arc(0, 0, 12, 0, Math.PI*2); ctx.fill();
       }
-      
       ctx.fillStyle = '#22c55e'; ctx.strokeStyle = '#14532d'; ctx.lineWidth = 1;
       const leafCount = ent.potShape === 'Kotak' ? 4 : (ent.potShape === 'Segi-6' ? 7 : 5);
-      const leafShape = ent.potShape === 'Kotak' ? 8 : (ent.potShape === 'Segi-6' ? 3 : 10); // Variety in leaf shape
-      
+      const leafShape = ent.potShape === 'Kotak' ? 8 : (ent.potShape === 'Segi-6' ? 3 : 10); 
       for(let i=0; i<leafCount; i++) {
         ctx.save();
-        ctx.rotate(i * (Math.PI*2/leafCount) + (Math.random() * 0.2)); // Sedikit acak arah
+        ctx.rotate(i * (Math.PI*2/leafCount) + (Math.random() * 0.2)); 
         ctx.beginPath(); 
-        // Gambar daun yang lebih realistis
         ctx.ellipse(12, 0, 14, leafShape, 0, 0, Math.PI*2); 
         ctx.fill(); ctx.stroke();
-        // Garis tengah daun
         ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(22, 0); ctx.strokeStyle = 'rgba(0,0,0,0.1)'; ctx.stroke();
         ctx.restore();
       }
@@ -413,7 +364,7 @@ export default function App() {
     ctx.restore();
   };
 
-  const drawLeader = (ctx: CanvasRenderingContext2D, l: Entity | any, isDrawing=false) => {
+  const drawLeader = (ctx: CanvasRenderingContext2D, l: any, isDrawing=false) => {
     ctx.save();
     ctx.beginPath(); ctx.moveTo(l.startX || l.x, l.startY || l.y); ctx.lineTo(l.currentX || l.endX, l.currentY || l.endY);
     ctx.strokeStyle = (selectedEntityId === l.id) ? '#3b82f6' : '#ef4444'; ctx.lineWidth = 2; ctx.stroke();
@@ -455,17 +406,17 @@ export default function App() {
       for(let n=0; n<words.length; n++) {
         const testLine = line + words[n] + ' '; const metrics = ctx.measureText(testLine);
         if(metrics.width > maxWidth && n > 0) {
-          renderTextLine(ctx, line, startY, note, paddingX, fSize, maxWidth);
+          renderTextLine(ctx, line, startY, note, paddingX, fSize);
           line = words[n] + ' '; startY += lineHeight;
         } else { line = testLine; }
       }
-      renderTextLine(ctx, line, startY, note, paddingX, fSize, maxWidth);
+      renderTextLine(ctx, line, startY, note, paddingX, fSize);
       startY += lineHeight;
     });
     ctx.restore();
   };
 
-  const renderTextLine = (ctx: CanvasRenderingContext2D, text: string, y: number, note: Entity, paddingX: number, fSize: number, maxWidth: number) => {
+  const renderTextLine = (ctx: CanvasRenderingContext2D, text: string, y: number, note: Entity, paddingX: number, fSize: number) => {
     const cleanText = text.trim(); if(!cleanText) return;
     const metrics = ctx.measureText(cleanText); let x = -note.w/2 + paddingX;
     if (note.align === 'center') { x = -metrics.width / 2; } else if (note.align === 'right') { x = note.w/2 - paddingX - metrics.width; }
@@ -525,7 +476,7 @@ export default function App() {
       newEnts = newEnts.map(e => {
         if(boundEnts.includes(e)) {
           const dx = e.x - cx; const dy = e.y - cy;
-          let updated = { ...e, x: cx - dy, y: cy + dx, rotation: (e.rotation || 0) + 90 };
+          const updated = { ...e, x: cx - dy, y: cy + dx, rotation: (e.rotation || 0) + 90 };
           if(e.type === 'furniture' || e.type === 'opening') {
             if(e.subType !== 'Tanaman' && e.subType !== 'Kursi Kerja') { const tmp = updated.w; updated.w = updated.h; updated.h = tmp; }
           }
@@ -565,6 +516,7 @@ export default function App() {
   const deleteSelected = useCallback(() => {
     if (selectedEntityId) { saveState(rooms, entities.filter(e => e.id !== selectedEntityId)); setSelectedEntityId(null); }
     if (selectedRoomId) { actionRoom('delete'); }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedEntityId, selectedRoomId, rooms, entities, saveState]);
 
   const duplicateSelected = useCallback(() => {
@@ -577,6 +529,7 @@ export default function App() {
       }
     }
     if (selectedRoomId) { actionRoom('duplicate'); }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedEntityId, selectedRoomId, rooms, entities, saveState]);
 
   const undo = useCallback(() => {
@@ -612,8 +565,8 @@ export default function App() {
   const getMousePos = (e: React.MouseEvent | React.TouchEvent) => {
     if (!canvasRef.current) return { x: 0, y: 0 };
     const rect = canvasRef.current.getBoundingClientRect();
-    let clientX = 'clientX' in e ? e.clientX : e.touches[0].clientX;
-    let clientY = 'clientY' in e ? e.clientY : e.touches[0].clientY;
+    const clientX = 'clientX' in e ? e.clientX : e.touches[0].clientX;
+    const clientY = 'clientY' in e ? e.clientY : e.touches[0].clientY;
     return { x: clientX - rect.left, y: clientY - rect.top };
   };
 
@@ -627,17 +580,17 @@ export default function App() {
 
   const getWallSnap = (mx: number, my: number) => {
     const t = 15;
-    for(let r of rooms) {
+    for(const r of rooms) {
       const walls = [
         { x: r.x + r.w/2, y: r.y, w: r.w, h: t, side: 'top', rx:r.x, ry:r.y },
         { x: r.x + r.w/2, y: r.y + r.h, w: r.w, h: t, side: 'bottom', rx:r.x, ry:r.y },
         { x: r.x, y: r.y + r.h/2, w: t, h: r.h, side: 'left', rx:r.x, ry:r.y },
         { x: r.x + r.w, y: r.y + r.h/2, w: t, h: r.h, side: 'right', rx:r.x, ry:r.y }
       ];
-      for (let w of walls) {
+      for (const w of walls) {
         if (Math.abs(mx - w.x) < (w.side==='top'||w.side==='bottom'?w.w/2:20) && 
             Math.abs(my - w.y) < (w.side==='left'||w.side==='right'?w.h/2:20)) {
-          return { x: w.side==='left'||w.side==='right'?w.x:mx, y: w.side==='top'||w.side==='bottom'?w.y:my, side: w.side as any, roomId: r.id };
+          return { x: w.side==='left'||w.side==='right'?w.x:mx, y: w.side==='top'||w.side==='bottom'?w.y:my, side: w.side as any }; // eslint-disable-line @typescript-eslint/no-explicit-any
         }
       }
     }
@@ -684,7 +637,7 @@ export default function App() {
       if (snap) {
         const newEnt: Entity = { 
           id: uuid(), type: 'opening', x: snap.x, y: snap.y, wallSide: snap.side,
-          subType: openingForm.type, count: openingForm.count, swingDir: openingForm.dir as any, 
+          subType: openingForm.type, count: openingForm.count, swingDir: openingForm.dir as any, // eslint-disable-line @typescript-eslint/no-explicit-any
           w: openingForm.w, h: 15 
         };
         saveState(rooms, [...entities, newEnt]); setMode('select'); setSelectedEntityId(newEnt.id);
@@ -712,9 +665,8 @@ export default function App() {
         if (r) {
           let newX = pos.x - dd.offsetX; let newY = pos.y - dd.offsetY;
           
-          // Snapping
           const SNAP = 15;
-          for (let o of rooms) {
+          for (const o of rooms) {
             if (o.id === r.id) continue;
             if (Math.abs(newX - (o.x + o.w)) < SNAP) newX = o.x + o.w; 
             if (Math.abs((newX + r.w) - o.x) < SNAP) newX = o.x - r.w; 
@@ -735,14 +687,14 @@ export default function App() {
             }
             return ent;
           });
-          setRooms(newRooms); setEntities(newEnts); // Intermediate update
+          setRooms(newRooms); setEntities(newEnts);
         }
       } else {
         const newEnts = entities.map(ent => {
           if (ent.id === dd.id) {
             if (ent.type === 'opening') {
               const snap = getWallSnap(pos.x, pos.y);
-              if (snap) return { ...ent, x: snap.x, y: snap.y, wallSide: snap.side as any };
+              if (snap) return { ...ent, x: snap.x, y: snap.y, wallSide: snap.side as any }; // eslint-disable-line @typescript-eslint/no-explicit-any
             } else if (ent.type === 'leader') {
               if (dd.draggingEnd) return { ...ent, endX: pos.x - dd.offsetX, endY: pos.y - dd.offsetY };
               return { ...ent, x: pos.x - dd.offsetX, y: pos.y - dd.offsetY };
@@ -752,18 +704,18 @@ export default function App() {
           }
           return ent;
         });
-        setEntities(newEnts); // Intermediate update
+        setEntities(newEnts);
       }
     }
     if (leaderDrawDataRef.current) {
       leaderDrawDataRef.current.currentX = pos.x; leaderDrawDataRef.current.currentY = pos.y;
-      draw(); // Force draw for fluid leader lines
+      draw();
     }
   };
 
   const handleMouseUp = () => {
     if (dragDataRef.current) {
-      saveState(rooms, entities); // Commit final drag state
+      saveState(rooms, entities);
       dragDataRef.current = null;
     }
     if (leaderDrawDataRef.current) {
@@ -790,7 +742,6 @@ export default function App() {
       return e;
     });
     
-    // Auto-resize notes based on text
     if (updatedEnt && (updatedEnt as Entity).type === 'note' && canvasRef.current) {
        const ctx = canvasRef.current.getContext('2d');
        if (ctx) {
@@ -821,7 +772,7 @@ export default function App() {
   const printPDF = () => {
     const opt = { margin: 10, filename: 'Denah_Ruangan.pdf', image: { type: 'jpeg', quality: 0.98 }, html2canvas: { scale: 1 }, jsPDF: { unit: 'mm', format: 'a3', orientation: 'landscape' } };
     const wrapper = document.getElementById('canvasWrapper');
-    if ((window as any).html2pdf && wrapper) (window as any).html2pdf().set(opt).from(wrapper).save();
+    if ((window as any).html2pdf && wrapper) (window as any).html2pdf().set(opt).from(wrapper).save(); // eslint-disable-line @typescript-eslint/no-explicit-any
   };
 
   const activeEnt = entities.find(e => e.id === selectedEntityId);
@@ -838,7 +789,6 @@ export default function App() {
         </div>
 
         <div className="p-4 flex-1 space-y-6">
-          {/* Global Tools */}
           <div>
             <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Peralatan</div>
             <div className="flex gap-2">
@@ -856,7 +806,6 @@ export default function App() {
 
           <hr className="border-slate-100"/>
 
-          {/* Material Palette */}
           <div>
             <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Material Aktif</div>
             <div className="flex flex-wrap gap-2">
@@ -868,13 +817,12 @@ export default function App() {
 
           <hr className="border-slate-100"/>
 
-          {/* Create Objects */}
           <div>
             <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Furnitur</div>
             <div className="flex flex-col gap-2">
               <select className="p-2 text-sm border border-slate-200 rounded-lg outline-none focus:border-blue-500 bg-white" value={objForm.type} onChange={(e) => {
                 const type = e.target.value;
-                const sizes: any = { 'Kursi Kerja': [60,60], 'Sofa': [160,80], 'Meja': [120,60], 'Kulkas': [70,70], 'Tanaman': [50,50], 'Karpet': [200,300], 'Proyektor': [30,20], 'Meja Tamu': [90,50], 'AC Indoor': [80,25], 'Custom': [100,100] };
+                const sizes: Record<string, number[]> = { 'Kursi Kerja': [60,60], 'Sofa': [160,80], 'Meja': [120,60], 'Kulkas': [70,70], 'Tanaman': [50,50], 'Karpet': [200,300], 'Proyektor': [30,20], 'Meja Tamu': [90,50], 'AC Indoor': [80,25], 'Custom': [100,100] };
                 setObjForm({...objForm, type, w: sizes[type][0], h: sizes[type][1]});
               }}>
                 <option value="Kursi Kerja">Kursi Kerja</option><option value="Sofa">Sofa</option><option value="Meja">Meja</option><option value="Kulkas">Kulkas</option><option value="Tanaman">Tanaman</option><option value="Karpet">Karpet</option><option value="Proyektor">Proyektor</option><option value="Meja Tamu">Meja Tamu</option><option value="AC Indoor">AC Indoor</option><option value="Custom">Custom</option>
@@ -897,7 +845,6 @@ export default function App() {
 
           <hr className="border-slate-100"/>
 
-          {/* Architecture */}
           <div>
             <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Arsitektur (Snap)</div>
             <div className="flex flex-col gap-2">
@@ -915,13 +862,13 @@ export default function App() {
                 </select>
               )}
               <div className="flex gap-2 items-center">
-                <input type="number" className="w-20 p-2 text-sm border border-slate-200 rounded-lg outline-none" value={openingForm.w} onChange={e=>setOpeningForm({...openingForm, w: parseInt(e.target.value)||80})} placeholder="Lebar px" />
+                <input type="number" className="w-16 p-2 text-sm border border-slate-200 rounded-lg outline-none" value={openingForm.w} onChange={e=>setOpeningForm({...openingForm, w: parseInt(e.target.value)||80})} placeholder="px" />
                 <button onClick={() => setMode('opening')} className={`flex-1 p-2 font-medium rounded-lg flex justify-center items-center gap-1 transition-colors shadow-sm ${mode === 'opening' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}><Plus size={16}/> {mode === 'opening' ? 'Pasang...' : 'Pasang'}</button>
               </div>
             </div>
             
             <div className="mt-4 flex gap-2 items-center">
-              <span className="text-sm font-medium w-12">Kolom</span>
+              <span className="text-sm font-medium w-16">Kolom</span>
               <input type="number" className="w-16 p-2 text-sm border border-slate-200 rounded-lg outline-none text-center" value={colSize} onChange={e=>setColSize(parseInt(e.target.value)||30)} placeholder="px" />
               <button onClick={addColumn} className="flex-1 p-2 bg-slate-100 text-slate-700 font-medium rounded-lg hover:bg-slate-200 flex justify-center items-center gap-1 shadow-sm"><Plus size={16}/> Buat</button>
             </div>
@@ -974,7 +921,6 @@ export default function App() {
              </div>
           )}
 
-          {/* Edit Entity */}
           {activeEnt && (
             <div className="space-y-6">
               <div className="flex gap-2">
@@ -1041,7 +987,6 @@ export default function App() {
             </div>
           )}
 
-          {/* Edit Room */}
           {activeRoom && !activeEnt && (
             <div className="space-y-4">
               <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Ukuran Ruangan</div>
