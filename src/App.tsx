@@ -1,19 +1,25 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
-import type { User } from 'firebase/auth';
+// TS1484: Impor User menggunakan 'type'
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, type User } from 'firebase/auth';
+// TS6133: Hapus 'collection' yang tidak terpakai
 import { getFirestore, doc, setDoc, onSnapshot } from 'firebase/firestore';
 import { 
   MousePointer2, PenTool, StickyNote, Plus, RotateCw, Copy, Trash2, 
   SplitSquareHorizontal, SplitSquareVertical, Undo, Redo, Download, 
   AlignLeft, AlignCenter, AlignRight, Bold, Italic, Underline, Highlighter, 
   Settings2, BoxSelect
+  // TS6133: Hapus Columns3
 } from 'lucide-react';
 
+// TS2552 & TS2304: Deklarasi variabel global agar TypeScript tidak bingung
 declare const __firebase_config: string | undefined;
 declare const __app_id: string | undefined;
 declare const __initial_auth_token: string | undefined;
 
+// =========================================================================
+// 1. FIREBASE INITIALIZATION
+// =========================================================================
 const firebaseConfig = typeof __firebase_config !== 'undefined' 
   ? JSON.parse(__firebase_config) 
   : { 
@@ -25,7 +31,6 @@ const firebaseConfig = typeof __firebase_config !== 'undefined'
   messagingSenderId: "472236933583",
   appId: "1:472236933583:web:cea60394372c8113dad2ba",
   measurementId: "G-S2YF7PXJX5"
-
     };
 
 const app = initializeApp(firebaseConfig);
@@ -35,6 +40,9 @@ const appId = typeof __app_id !== 'undefined' ? __app_id.replace(/[\/\.]/g, '_')
 
 // =========================================================================
 // 2. TYPES & INTERFACES
+// =========================================================================
+type EntityType = 'furniture' | 'opening' | 'column' | 'leader' | 'note';
+
 interface Room {
   id: string; x: number; y: number; w: number; h: number;
   floorPattern: string; floorColor: string; tileSize: number;
@@ -120,7 +128,7 @@ export default function App() {
           setEntities(data.entities || []);
         }
       }
-    }, (err) => console.warn("Sync Error (If permissions fail, ensure rules are set in Firebase):", err));
+    }, (err) => console.warn("Sync Error:", err));
     
     return () => unsub();
   }, [user]);
@@ -405,6 +413,7 @@ export default function App() {
       const words = rawLine.split(' '); let line = '';
       for(let n=0; n<words.length; n++) {
         const testLine = line + words[n] + ' '; const metrics = ctx.measureText(testLine);
+        // TS6133 Fix: Kita tidak perlu mengirim 'maxWidth' jika tidak dipakai di renderTextLine
         if(metrics.width > maxWidth && n > 0) {
           renderTextLine(ctx, line, startY, note, paddingX, fSize);
           line = words[n] + ' '; startY += lineHeight;
