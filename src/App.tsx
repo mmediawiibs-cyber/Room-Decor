@@ -1,42 +1,35 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { initializeApp } from 'firebase/app';
-// TS1484: Impor User menggunakan 'type'
-import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, type User } from 'firebase/auth';
-// TS6133: Hapus 'collection' yang tidak terpakai
+// TS1484 Fix: Tambahkan 'type' sebelum User
+import { getAuth, signInAnonymously, onAuthStateChanged, type User } from 'firebase/auth';
+// TS6133 Fix: Hapus 'collection' yang tidak dipakai
 import { getFirestore, doc, setDoc, onSnapshot } from 'firebase/firestore';
 import { 
   MousePointer2, PenTool, StickyNote, Plus, RotateCw, Copy, Trash2, 
   SplitSquareHorizontal, SplitSquareVertical, Undo, Redo, Download, 
   AlignLeft, AlignCenter, AlignRight, Bold, Italic, Underline, Highlighter, 
   Settings2, BoxSelect
-  // TS6133: Hapus Columns3
+  // TS6133 Fix: Hapus 'Columns3' yang tidak dipakai
 } from 'lucide-react';
 
-// TS2552 & TS2304: Deklarasi variabel global agar TypeScript tidak bingung
-declare const __firebase_config: string | undefined;
-declare const __app_id: string | undefined;
-declare const __initial_auth_token: string | undefined;
-
 // =========================================================================
-// 1. FIREBASE INITIALIZATION
+// 1. FIREBASE INITIALIZATION (TS2552 & TS2304 Fix: Hapus variabel __ siluman)
 // =========================================================================
-const firebaseConfig = typeof __firebase_config !== 'undefined' 
-  ? JSON.parse(__firebase_config) 
-  : { 
-      // FALLBACK UNTUK LOCAL DEV DI VSCODE - Ganti dengan config Anda!
-      apiKey: "AIzaSyDCS7BUdvaE7BtKJBmD8zZKnMGehfhKUtA",
+const firebaseConfig = { 
+  // Ganti dengan config Firebase Anda sendiri
+  apiKey: "AIzaSyDCS7BUdvaE7BtKJBmD8zZKnMGehfhKUtA",
   authDomain: "room-decor-f20d4.firebaseapp.com",
   projectId: "room-decor-f20d4",
   storageBucket: "room-decor-f20d4.firebasestorage.app",
   messagingSenderId: "472236933583",
   appId: "1:472236933583:web:cea60394372c8113dad2ba",
   measurementId: "G-S2YF7PXJX5"
-    };
+};
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id.replace(/[\/\.]/g, '_') : 'room-decorator-app';
+const appId = 'room-decorator-app'; // Menggunakan string biasa yang aman
 
 // =========================================================================
 // 2. TYPES & INTERFACES
@@ -99,13 +92,10 @@ export default function App() {
   const [colSize, setColSize] = useState(30);
 
   useEffect(() => {
+    // TS2304 Fix: Disederhanakan untuk pemakaian normal
     const initAuth = async () => {
       try {
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-          await signInWithCustomToken(auth, __initial_auth_token);
-        } else {
-          await signInAnonymously(auth);
-        }
+        await signInAnonymously(auth);
       } catch (err) { console.warn("Auth warning:", err); }
     };
     initAuth();
@@ -115,9 +105,7 @@ export default function App() {
 
   useEffect(() => {
     if (!user) return;
-    const path = typeof __app_id !== 'undefined' 
-      ? `artifacts/${appId}/public/data/workspaces/team_layout_utama` 
-      : 'workspaces/team_layout_utama';
+    const path = `workspaces/team_layout_utama`;
     const docRef = doc(db, path);
     
     const unsub = onSnapshot(docRef, (snapshot) => {
@@ -151,10 +139,7 @@ export default function App() {
 
     if (user && !isSyncing) {
       setIsSyncing(true);
-      const path = typeof __app_id !== 'undefined' 
-        ? `artifacts/${appId}/public/data/workspaces/team_layout_utama` 
-        : 'workspaces/team_layout_utama';
-      const docRef = doc(db, path);
+      const docRef = doc(db, 'workspaces/team_layout_utama');
       
       setDoc(docRef, { rooms: newRooms, entities: newEnts })
         .catch(e => console.warn("Cannot save to Firebase:", e))
@@ -413,7 +398,7 @@ export default function App() {
       const words = rawLine.split(' '); let line = '';
       for(let n=0; n<words.length; n++) {
         const testLine = line + words[n] + ' '; const metrics = ctx.measureText(testLine);
-        // TS6133 Fix: Kita tidak perlu mengirim 'maxWidth' jika tidak dipakai di renderTextLine
+        // TS6133 Fix: Kita tidak melempar parameter maxWidth jika tidak dipakai
         if(metrics.width > maxWidth && n > 0) {
           renderTextLine(ctx, line, startY, note, paddingX, fSize);
           line = words[n] + ' '; startY += lineHeight;
